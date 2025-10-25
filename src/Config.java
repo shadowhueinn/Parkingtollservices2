@@ -1,179 +1,189 @@
 import java.sql.*;
+import java.util.*;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 public class Config {
-    private static final String DB_URL = "jdbc:sqlite:parking.db";
-    private Connection conn;
 
-    public Config() {
+    public static Connection connectDB() {
+        Connection con = null;
         try {
-            conn = DriverManager.getConnection(DB_URL);
-            createTables();
-            createDefaultAdmin();
+            Class.forName("org.sqlite.JDBC");
+            con = DriverManager.getConnection("jdbc:sqlite:parking.db");
+            System.out.println("Connection to parking.db successful at " + new java.util.Date());
+        } catch (ClassNotFoundException e) {
+            System.out.println("SQLite JDBC driver not found: " + e.getMessage());
         } catch (SQLException e) {
-            System.out.println("Database connection error: " + e.getMessage());
+            System.out.println("Connection to parking.db failed: " + e.getMessage());
         }
-    }
-
-    // Close connection
-    public void close() {
-        try {
-            if (conn != null) conn.close();
-        } catch (SQLException e) {
-            System.out.println("Error closing connection: " + e.getMessage());
+        if (con == null) {
+            System.out.println("Warning: connectDB returned null connection!");
         }
+        return con;
     }
 
-    private void createTables() throws SQLException {
-        Statement stmt = conn.createStatement();
-
-        // Admin table
-        stmt.execute("CREATE TABLE IF NOT EXISTS admin (" +
-                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "username TEXT UNIQUE NOT NULL," +
-                "password TEXT NOT NULL)");
-
-        // Users table
-        stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
-                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "name TEXT NOT NULL," +
-                "email TEXT UNIQUE NOT NULL," +
-                "password TEXT NOT NULL," +
-                "is_approved INTEGER DEFAULT 0)");
-
-        // Parking slots table
-        stmt.execute("CREATE TABLE IF NOT EXISTS parking_slots (" +
-                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "slot_number INTEGER UNIQUE," +
-                "is_occupied INTEGER DEFAULT 0)");
-
-        // Initialize 50 parking slots if not exist
-        for (int i = 1; i <= 50; i++) {
-            stmt.execute("INSERT OR IGNORE INTO parking_slots(slot_number, is_occupied) VALUES(" + i + ", 0)");
-        }
-
-        stmt.close();
-    }
-
-    private void createDefaultAdmin() throws SQLException {
-        PreparedStatement pstmt = conn.prepareStatement(
-                "INSERT OR IGNORE INTO admin(username, password) VALUES(?, ?)"
-        );
-        pstmt.setString(1, "admin");  // default username
-        pstmt.setString(2, "admin123"); // default password
-        pstmt.executeUpdate();
-        pstmt.close();
-    }
-
-    // Admin login
-    public boolean adminLogin(String username, String password) {
-        try {
-            PreparedStatement pstmt = conn.prepareStatement(
-                    "SELECT * FROM admin WHERE username=? AND password=?"
-            );
-            pstmt.setString(1, username);
-            pstmt.setString(2, password);
-            ResultSet rs = pstmt.executeQuery();
-            boolean success = rs.next();
-            rs.close();
-            pstmt.close();
-            return success;
-        } catch (SQLException e) {
-            System.out.println("Admin login error: " + e.getMessage());
-            return false;
-        }
-    }
-
-    // Register user
-    public boolean registerUser(String name, String email, String password) {
-        try {
-            PreparedStatement pstmt = conn.prepareStatement(
-                    "INSERT INTO users(name, email, password) VALUES(?, ?, ?)"
-            );
-            pstmt.setString(1, name);
-            pstmt.setString(2, email);
-            pstmt.setString(3, password);
-            pstmt.executeUpdate();
-            pstmt.close();
-            return true;
-        } catch (SQLException e) {
-            System.out.println("Error registering user: " + e.getMessage());
-            return false;
-        }
-    }
-
-    // Approve user
-    public void approveUser(int userId) {
-        try {
-            PreparedStatement pstmt = conn.prepareStatement(
-                    "UPDATE users SET is_approved=1 WHERE id=?"
-            );
-            pstmt.setInt(1, userId);
-            pstmt.executeUpdate();
-            pstmt.close();
-        } catch (SQLException e) {
-            System.out.println("Error approving user: " + e.getMessage());
-        }
-    }
-
-    // List unapproved users
-    public void listPendingUsers() {
-        try {
-            Statement stmt = conn.createStatement();
-            ResultSet rs = stmt.executeQuery("SELECT * FROM users WHERE is_approved=0");
-            System.out.println("--- Pending Users ---");
-            while (rs.next()) {
-                System.out.println("ID: " + rs.getInt("id") +
-                        " | Name: " + rs.getString("name") +
-                        " | Email: " + rs.getString("email"));
+    private void setPreparedStatementValues(PreparedStatement pstmt, Object... values) throws SQLException {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] instanceof Integer) {
+                pstmt.setInt(i + 1, (Integer) values[i]);
+            } else if (values[i] instanceof Double) {
+                pstmt.setDouble(i + 1, (Double) values[i]);
+            } else if (values[i] instanceof Float) {
+                pstmt.setFloat(i + 1, (Float) values[i]);
+            } else if (values[i] instanceof Long) {
+                pstmt.setLong(i + 1, (Long) values[i]);
+            } else if (values[i] instanceof Boolean) {
+                pstmt.setBoolean(i + 1, (Boolean) values[i]);
+            } else if (values[i] instanceof java.util.Date) {
+                pstmt.setDate(i + 1, new java.sql.Date(((java.util.Date) values[i]).getTime()));
+            } else if (values[i] instanceof java.sql.Date) {
+                pstmt.setDate(i + 1, (java.sql.Date) values[i]);
+            } else if (values[i] instanceof java.sql.Timestamp) {
+                pstmt.setTimestamp(i + 1, (java.sql.Timestamp) values[i]);
+            } else {
+                pstmt.setString(i + 1, values[i] != null ? values[i].toString() : null);
             }
-            rs.close();
-            stmt.close();
-        } catch (SQLException e) {
-            System.out.println("Error listing users: " + e.getMessage());
         }
     }
 
-    // Park a car
-    public int parkCar() {
-        try {
-            PreparedStatement pstmt = conn.prepareStatement(
-                    "SELECT slot_number FROM parking_slots WHERE is_occupied=0 LIMIT 1"
-            );
+    public void addRecord(String sql, Object... values) {
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            System.out.println("Executing add: " + sql);
+            setPreparedStatementValues(pstmt, values);
+            pstmt.executeUpdate();
+            System.out.println("Record added successfully!");
+        } catch (SQLException e) {
+            System.out.println("Error adding record: " + e.getMessage());
+        }
+    }
+
+    public int addRecordAndReturnId(String query, Object... params) {
+        int generatedId = -1;
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(query, PreparedStatement.RETURN_GENERATED_KEYS)) {
+            System.out.println("Executing insert with ID: " + query);
+            setPreparedStatementValues(pstmt, params);
+            int affectedRows = pstmt.executeUpdate();
+            if (affectedRows > 0) {
+                try (ResultSet rs = pstmt.getGeneratedKeys()) {
+                    if (rs.next()) {
+                        generatedId = rs.getInt(1);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.out.println("Error inserting record: " + e.getMessage());
+        }
+        return generatedId;
+    }
+
+    public void viewRecords(String sqlQuery, String[] columnHeaders, String[] columnNames) {
+        if (columnHeaders.length != columnNames.length) {
+            System.out.println("Error: Mismatch between column headers and column names.");
+            return;
+        }
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sqlQuery);
+             ResultSet rs = pstmt.executeQuery()) {
+            System.out.println("Executing view: " + sqlQuery);
+            StringBuilder headerLine = new StringBuilder();
+            headerLine.append("--------------------------------------------------------------------------------\n| ");
+            for (String header : columnHeaders) {
+                headerLine.append(String.format("%-20s | ", header));
+            }
+            headerLine.append("\n--------------------------------------------------------------------------------");
+            System.out.println(headerLine.toString());
+            while (rs.next()) {
+                StringBuilder row = new StringBuilder("| ");
+                for (String colName : columnNames) {
+                    String value = rs.getString(colName);
+                    row.append(String.format("%-20s | ", value != null ? value : ""));
+                }
+                System.out.println(row.toString());
+            }
+            System.out.println("--------------------------------------------------------------------------------");
+        } catch (SQLException e) {
+            System.out.println("Error retrieving records: " + e.getMessage());
+        }
+    }
+
+    public void updateRecord(String sql, Object... values) {
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            System.out.println("Executing update: " + sql + " with values: " + Arrays.toString(values));
+            setPreparedStatementValues(pstmt, values);
+            int rowsAffected = pstmt.executeUpdate();
+            System.out.println("Record updated successfully! Rows affected: " + rowsAffected);
+        } catch (SQLException e) {
+            System.out.println("Error updating record: " + e.getMessage());
+        }
+    }
+
+    public void deleteRecord(String sql, Object... values) {
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            System.out.println("Executing delete: " + sql + " with values: " + Arrays.toString(values));
+            setPreparedStatementValues(pstmt, values);
+            int rowsAffected = pstmt.executeUpdate();
+            System.out.println("Record deleted successfully! Rows affected: " + rowsAffected);
+        } catch (SQLException e) {
+            System.out.println("Error deleting record: " + e.getMessage());
+        }
+    }
+
+    public List<Map<String, Object>> fetchRecords(String sqlQuery, Object... values) {
+        List<Map<String, Object>> records = new ArrayList<>();
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sqlQuery)) {
+            System.out.println("Executing fetch: " + sqlQuery + " with values: " + Arrays.toString(values));
+            setPreparedStatementValues(pstmt, values);
+            ResultSet rs = pstmt.executeQuery();
+            ResultSetMetaData metaData = rs.getMetaData();
+            int columnCount = metaData.getColumnCount();
+            while (rs.next()) {
+                Map<String, Object> row = new HashMap<>();
+                for (int i = 1; i <= columnCount; i++) {
+                    row.put(metaData.getColumnName(i), rs.getObject(i));
+                }
+                records.add(row);
+            }
+        } catch (SQLException e) {
+            System.out.println("Error fetching records: " + e.getMessage());
+        }
+        return records;
+    }
+
+    public double getSingleValue(String sql, Object... params) {
+        double result = 0.0;
+        try (Connection conn = connectDB();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            System.out.println("Executing getSingleValue: " + sql + " with values: " + Arrays.toString(params));
+            setPreparedStatementValues(pstmt, params);
             ResultSet rs = pstmt.executeQuery();
             if (rs.next()) {
-                int slot = rs.getInt("slot_number");
-                PreparedStatement update = conn.prepareStatement(
-                        "UPDATE parking_slots SET is_occupied=1 WHERE slot_number=?"
-                );
-                update.setInt(1, slot);
-                update.executeUpdate();
-                update.close();
-                rs.close();
-                pstmt.close();
-                return slot;
-            } else {
-                rs.close();
-                pstmt.close();
-                return -1; // no slots available
+                result = rs.getDouble(1);
             }
         } catch (SQLException e) {
-            System.out.println("Error parking car: " + e.getMessage());
-            return -1;
+            System.out.println("Error retrieving single value: " + e.getMessage());
         }
+        return result;
     }
 
-    // Exit car and pay
-    public void exitCar(int slotNumber) {
+    public static String hashPassword(String password) {
         try {
-            PreparedStatement pstmt = conn.prepareStatement(
-                    "UPDATE parking_slots SET is_occupied=0 WHERE slot_number=?"
-            );
-            pstmt.setInt(1, slotNumber);
-            pstmt.executeUpdate();
-            pstmt.close();
-            System.out.println("Payment processed for slot " + slotNumber + ". Thank you!");
-        } catch (SQLException e) {
-            System.out.println("Error exiting car: " + e.getMessage());
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hashedBytes = md.digest(password.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashedBytes) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            System.out.println("Error hashing password: " + e.getMessage());
+            return null;
         }
     }
 }
